@@ -1,6 +1,6 @@
 import aiogram.utils.exceptions
-
-from db_function import is_admin_allowed, create_db, get_all_users, increase_messages_viewed
+from db_function import is_admin_allowed, create_db, get_all_users, increase_messages_viewed, \
+    create_admins_table, create_users_table
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -10,7 +10,8 @@ from aiogram import executor
 import configparser
 import schedule
 import datetime
-import sqlite3
+from database import connect_to_database
+
 import asyncio
 
 class SendMessage(StatesGroup):
@@ -33,12 +34,9 @@ async def your_task():
     for user in users:
         user_id = user[1]  # Предполагается, что user_id находится на первой позиции
 
-        conn = sqlite3.connect('bot_database.db')
+        conn = connect_to_database()
         cursor = conn.cursor()
-        if user[7] == 0:
-            cursor.execute('SELECT * FROM data WHERE identifier_name = "start_text"')
-            data_rows = cursor.fetchall()
-        elif user[7] == 1:
+        if user[7] == 1:
             cursor.execute('SELECT * FROM data WHERE identifier_name = "first_send"')
             data_rows = cursor.fetchall()
         elif user[7] == 2:
@@ -124,11 +122,11 @@ async def start_command_handler(message: types.Message):
         user_last_name = message.from_user.last_name
         user_username = message.from_user.username
 
-        conn = sqlite3.connect('bot_database.db')
+        conn = connect_to_database()
         cursor = conn.cursor()
 
         # Проверяем, есть ли пользователь в базе данных
-        cursor.execute('SELECT * FROM users WHERE tg_id = ?', (user_id,))
+        cursor.execute('SELECT * FROM users WHERE tg_id = %s', (user_id,))
         existing_user = cursor.fetchone()
 
         current_date = datetime.date.today().strftime("%Y-%m-%d")
@@ -136,18 +134,20 @@ async def start_command_handler(message: types.Message):
 
         if existing_user:
             # Если пользователь уже есть в базе данных, обновляем его данные
-            cursor.execute('UPDATE users SET tg_first_name = ?, tg_last_name = ?, tg_username = ?, '
-                           'registration_date = ?, registration_time = ?  WHERE tg_id = ?',
+            cursor.execute('UPDATE users SET tg_first_name = %s, tg_last_name = %s, tg_username = %s, '
+                           'registration_date = %s, registration_time = %s WHERE tg_id = %s',
                            (user_first_name, user_last_name, user_username, current_date, current_time, user_id))
+
             conn.commit()
             conn.close()
         else:
 
             # Если пользователь новый, добавляем его в базу данных
-            cursor.execute('INSERT INTO users (tg_id, tg_first_name, tg_last_name, tg_username, registration_date,'
-                           'registration_time, messages_viewed) '
-                           'VALUES (?, ?, ?, ?, ?, ?, 0)', (user_id, user_first_name, user_last_name, user_username,
-                                                            current_date, current_time))
+            cursor.execute(
+                'INSERT INTO users (tg_id, tg_first_name, tg_last_name, tg_username, registration_date, registration_time, messages_viewed) '
+                'VALUES (%s, %s, %s, %s, %s, %s, 0)',
+                (user_id, user_first_name, user_last_name, user_username, current_date, current_time))
+
             conn.commit()
             conn.close()
             increase_messages_viewed(user_id)
@@ -155,7 +155,7 @@ async def start_command_handler(message: types.Message):
 
 
         # Отправляем сообщение пользователю с данными из таблицы data
-        conn = sqlite3.connect('bot_database.db')
+        conn = connect_to_database()
         cursor = conn.cursor()
 
         cursor.execute('SELECT * FROM data WHERE identifier_name = "start_text"')
@@ -174,8 +174,7 @@ async def start_command_handler(message: types.Message):
                 await bot.send_photo(user_id, photo=open(image_path, 'rb'), caption=identifier_text)
 
             elif video_path:
-                await bot.send_video(user_id, video=open(video_path, 'rb'), caption=identifier_text)
-
+                await bot.send_video(user_id, video=video_path, caption=identifier_text)
             elif file_path:
                 await bot.send_document(user_id, document=open(file_path, 'rb'), caption=identifier_text)
 
@@ -242,6 +241,8 @@ async def forward_message_step(message: types.Message, state: FSMContext):
 
 if __name__ == '__main__':
     create_db()
+    create_admins_table()
+    create_users_table()
     loop = asyncio.get_event_loop()
     loop.create_task(start_scheduler())
     executor.start_polling(dp, skip_updates=True)
